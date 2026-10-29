@@ -237,5 +237,62 @@ def do_sequence(steps: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"ok": True, "executed": len(steps), "log": log, "position": m.pos()}
 
 
+@app.tool()
+def ocr_screen(
+    left: Optional[int] = None, top: Optional[int] = None,
+    width: Optional[int] = None, height: Optional[int] = None,
+    min_conf: float = 0.5,
+) -> Dict[str, Any]:
+    """OCR 识别屏幕上的所有文字 + 坐标（RapidOCR，本地 ONNX，不依赖 torch）
+
+    用于：桌面应用按钮、Canvas/图片里的文字、跨 iframe 的元素。
+    实测全屏 1080p 约 3.7s；只 OCR 区域会快得多。
+
+    返回：[{text, conf, bbox:[x,y,w,h], center:[cx,cy]}]，坐标为屏幕绝对坐标
+    """
+    from core.ocr import OcrDetector
+    c = cap()
+    region = None
+    if None not in (left, top, width, height):
+        region = (left, top, width, height)
+    img = c.grab_rgb_array(region)
+    ox, oy = (region[0], region[1]) if region else (0, 0)
+    items, ms = OcrDetector().detect(img, offset=(ox, oy), min_conf=min_conf)
+    return {"ok": True, "count": len(items), "elapsed_ms": round(ms),
+            "items": items}
+
+
+@app.tool()
+def find_text(
+    keyword: str, exact: bool = False, min_conf: float = 0.5,
+    left: Optional[int] = None, top: Optional[int] = None,
+    width: Optional[int] = None, height: Optional[int] = None,
+    annotate: bool = False,
+) -> Dict[str, Any]:
+    """按文字内容找元素位置（OCR）。
+
+    keyword: 要找的文字，如"新建文件夹""提交"。exact=True 时要求完全匹配。
+    annotate: 是否返回标注好的截图（base64）
+
+    返回匹配项列表，每项含 bbox/center（屏幕绝对坐标），可直接喂给 click()
+    """
+    from core.ocr import OcrDetector, to_points
+    c = cap()
+    region = None
+    if None not in (left, top, width, height):
+        region = (left, top, width, height)
+    img_arr = c.grab_rgb_array(region)
+    ox, oy = (region[0], region[1]) if region else (0, 0)
+    matches = OcrDetector().find(img_arr, keyword, offset=(ox, oy),
+                                 exact=exact, min_conf=min_conf)
+    out: Dict[str, Any] = {"ok": True, "keyword": keyword, "count": len(matches),
+                           "matches": matches}
+    if annotate and matches:
+        pts = to_points(matches)
+        im = c.annotate(c.grab(region), pts, offset=(ox, oy))
+        out["image_base64"] = _b64(im)
+    return out
+
+
 if __name__ == "__main__":
     app.run()
